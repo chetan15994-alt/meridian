@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+secrets.yaml
+jobcopilot.db
+resume_master.yaml
+config.yaml
+cv_versions/
+outputs/resumes/*.docx
+outputs/prompts/*.txt
+*.zip
