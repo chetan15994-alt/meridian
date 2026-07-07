@@ -1,0 +1,166 @@
+# Interview Coach — scoring rubrics.
+#
+# rubric_version bumps whenever dimensions/anchors change. Every session stores
+# the version it was scored against, so week-over-week "improvement" reflects
+# real change, not a moving evaluator (see PROJECT_STATE / discovery dossier D).
+# Anchors are deliberately blunt (1-4, not 1-10) to fight sycophancy: a vague
+# "6.5/10" invites softness, a forced choice between anchored bands does not.
+
+rubric_version: 1
+
+rounds:
+  product_sense:
+    label: "Product Sense / Design"
+    dimensions:
+      - key: user_empathy
+        label: "User empathy"
+        anchors:
+          1: "Jumps to a solution without naming a real user or their pain."
+          2: "Names a user segment but pain points are generic or assumed."
+          3: "Grounds the problem in a specific, plausible user pain."
+          4: "Uncovers a non-obvious user insight that reframes the problem."
+      - key: structure
+        label: "Structured thinking"
+        anchors:
+          1: "Rambles; no visible framework; jumps between ideas."
+          2: "Uses a framework but applies it mechanically."
+          3: "Clear scope -> segment -> prioritize -> propose flow, stated explicitly."
+          4: "Structure adapts live when the interviewer changes constraints."
+      - key: product_taste
+        label: "Product taste"
+        anchors:
+          1: "Proposes the first idea that comes to mind, unprioritized."
+          2: "Lists several ideas without a clear prioritization rationale."
+          3: "Prioritizes with a defensible impact/effort or similar rationale."
+          4: "Trade-offs are sharp, opinionated, and defended under pushback."
+      - key: strategic_awareness
+        label: "Strategic awareness"
+        anchors:
+          1: "No connection to business goals or company context."
+          2: "Mentions business goals in passing, not woven into the answer."
+          3: "Explicitly ties the proposal to a plausible business/company goal."
+          4: "Anticipates second-order effects and competitive/market context."
+      - key: communication
+        label: "Communication"
+        anchors:
+          1: "Hard to follow; unclear what was actually decided."
+          2: "Understandable but verbose or meandering."
+          3: "Concise, signposted, easy to follow in real time."
+          4: "Crisp enough that a summary would need no editing."
+
+  execution:
+    label: "Execution / Analytical Thinking"
+    dimensions:
+      - key: metric_definition
+        label: "Metric definition"
+        anchors:
+          1: "No concrete metric named, or names something unmeasurable."
+          2: "Names a metric but it's vague (e.g. 'engagement') without a definition."
+          3: "Defines a precise north star plus supporting metrics."
+          4: "North star, supporting metrics, AND guardrails, all precise."
+      - key: prioritization
+        label: "Prioritization under constraints"
+        anchors:
+          1: "Treats every option as equally important."
+          2: "Prioritizes but the rationale is unstated or shaky."
+          3: "Clear, defensible prioritization logic under stated constraints."
+          4: "Explicitly trades off competing constraints and defends the call."
+      - key: diagnosis
+        label: "Diagnostic reasoning"
+        anchors:
+          1: "Guesses at a cause without a method."
+          2: "Lists possible causes without narrowing down."
+          3: "Uses a structured tree (internal/external, segment cuts) to narrow."
+          4: "Converges on the most likely cause AND states how to verify it."
+      - key: rigor
+        label: "Data rigor"
+        anchors:
+          1: "No numbers; purely qualitative reasoning."
+          2: "Uses numbers but doesn't sanity-check them."
+          3: "Uses numbers and sanity-checks orders of magnitude."
+          4: "Numbers are precise, sanity-checked, and drive the final call."
+      - key: communication
+        label: "Communication"
+        anchors:
+          1: "Hard to follow; unclear what was actually decided."
+          2: "Understandable but verbose or meandering."
+          3: "Concise, signposted, easy to follow in real time."
+          4: "Crisp enough that a summary would need no editing."
+
+  rca:
+    label: "RCA / Metric-drop diagnosis"
+    dimensions:
+      - key: clarifying_scope
+        label: "Clarifying scope before diagnosing"
+        anchors:
+          1: "Starts guessing causes before asking what actually moved."
+          2: "Asks one or two clarifying questions, then moves on quickly."
+          3: "Systematically confirms the metric, timeframe, and segment first."
+          4: "Scoping questions themselves narrow the hypothesis space fast."
+      - key: hypothesis_tree
+        label: "Hypothesis tree quality"
+        anchors:
+          1: "Single hypothesis, no alternatives considered."
+          2: "A few hypotheses, not organized (internal vs external, etc.)."
+          3: "A clear internal/external x segment tree of hypotheses."
+          4: "Tree is exhaustive AND ordered by likelihood/ease of checking."
+      - key: convergence
+        label: "Convergence on the real cause"
+        anchors:
+          1: "Never narrows down; ends on a list of maybes."
+          2: "Narrows to 2-3 candidates without picking one."
+          3: "Converges on a single most-likely cause with reasoning."
+          4: "Converges AND proposes exactly how to confirm it with data."
+      - key: composure
+        label: "Composure under new information"
+        anchors:
+          1: "Thrown off when the interviewer reveals a constraint doesn't hold."
+          2: "Adjusts but loses structure while doing so."
+          3: "Incorporates new information smoothly, keeps structure."
+          4: "Uses the new information to sharpen the hypothesis tree further."
+      - key: communication
+        label: "Communication"
+        anchors:
+          1: "Hard to follow; unclear what was actually decided."
+          2: "Understandable but verbose or meandering."
+          3: "Concise, signposted, easy to follow in real time."
+          4: "Crisp enough that a summary would need no editing."
+
+  behavioral:
+    label: "Behavioral / Leadership"
+    dimensions:
+      - key: ownership
+        label: "Ownership"
+        anchors:
+          1: "Assigns blame elsewhere; unclear what the candidate actually did."
+          2: "Describes actions but downplays personal accountability."
+          3: "Clearly owns the decision and its consequences, good or bad."
+          4: "Proactively identifies what they'd prevent next time, unprompted."
+      - key: evidence
+        label: "Evidence under probing"
+        anchors:
+          1: "Cannot produce a specific metric or fact when pushed."
+          2: "Produces vague numbers that don't hold up to a follow-up."
+          3: "Produces specific, consistent numbers/facts across follow-ups."
+          4: "Anticipates the follow-up and pre-empts it with precision."
+      - key: conflict_handling
+        label: "Conflict / disagreement handling"
+        anchors:
+          1: "Avoids describing any real friction or disagreement."
+          2: "Describes conflict but resolution is vague or one-sided."
+          3: "Describes a real disagreement and a concrete resolution."
+          4: "Shows what they learned about themselves from the friction."
+      - key: introspection
+        label: "Introspection"
+        anchors:
+          1: "No acknowledgment of a mistake, weakness, or gap."
+          2: "Names a weakness but it's a humblebrag ('I work too hard')."
+          3: "Names a real weakness/mistake and what changed as a result."
+          4: "Ties the introspection to a concrete, still-active behavior change."
+      - key: communication
+        label: "Communication"
+        anchors:
+          1: "Story lacks structure; hard to follow the sequence of events."
+          2: "Understandable but rambles past the point."
+          3: "Clear STAR-shaped structure, appropriately concise."
+          4: "Structure disappears because the story is just naturally clear."

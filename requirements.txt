@@ -6,8 +6,16 @@ sentence-transformers>=2.6,<6
 scikit-learn>=1.3,<2
 numpy>=1.24,<3
 python-docx>=1.1,<2
-streamlit>=1.37,<2
+streamlit>=1.38,<2
 pandas>=1.4,<3
 
 # dev / regression tests (run: python -m pytest tests/ -q)
 pytest>=7,<9
+
+# Interview Coach — LOCAL voice (optional). The app works fully without these:
+# text mode always works, and API-based voice (Settings -> Interview Coach)
+# needs neither. Install only if you want free, offline speech-to-text/
+# text-to-speech:
+#   pip install faster-whisper pyttsx3 --break-system-packages
+# faster-whisper>=1.0,<2
+# pyttsx3>=2.90,<3

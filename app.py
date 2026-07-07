@@ -1,7 +1,7 @@
 """Meridian — AI-powered job search copilot.  Run:  streamlit run app.py"""
 import json, datetime, os
 import streamlit as st
-import db, tailor, render, settings, llm, ingest, analytics, connectors, score, ui, run as runner, apply_prep
+import db, tailor, render, settings, llm, ingest, analytics, connectors, score, ui, run as runner, apply_prep, voice_io
 
 HERE = os.path.dirname(__file__)
 st.set_page_config(page_title="Meridian", page_icon="", layout="wide")
@@ -78,6 +78,53 @@ def do_job_extract(raw, deterministic, cfg):
         return jobimport.merge_llm(deterministic, obj), cost, None
     except Exception as e:
         return deterministic, 0.0, str(e)
+
+def interview_llm_json(cfg):
+    """Build a cost-tracked llm_json_fn closure for interview.py's injectable
+    LLM parameter — every engine call (interviewer turn, evaluator, synthesis)
+    is metered and capped through the SAME path as the rest of Meridian."""
+    tc = cfg.get("tailoring", {})
+    def _fn(prompt):
+        obj, usage = llm.chat_json(prompt, tc.get("base_url"), tc.get("model"),
+                                   api=tc.get("api", "openai"), api_key=llm.get_api_key())
+        cost = llm.est_cost(usage, price_for(cfg))
+        db.add_usage(usage.get("in", 0), usage.get("out", 0), cost); acc(usage, cost)
+        return obj, usage
+    return _fn
+
+def interview_llm_text(cfg):
+    """Same as above but for the plain-text opening-question call."""
+    tc = cfg.get("tailoring", {})
+    def _fn(prompt):
+        text, usage = llm.chat(prompt, tc.get("base_url"), tc.get("model"),
+                               api=tc.get("api", "openai"), api_key=llm.get_api_key())
+        cost = llm.est_cost(usage, price_for(cfg))
+        db.add_usage(usage.get("in", 0), usage.get("out", 0), cost); acc(usage, cost)
+        return text, usage
+    return _fn
+
+def do_transcribe(audio_bytes, cfg):
+    """Cost-tracked STT — only meters when the configured engine is API-based."""
+    ic = cfg.get("interview_coach", {})
+    engine = ic.get("stt_engine", "local_whisper")
+    result = voice_io.transcribe(audio_bytes, engine=engine, api_key=llm.get_api_key(),
+                                 base_url=ic.get("stt_base_url"))
+    if engine == "openai_api":
+        mins = (result.get("duration_s") or 0) / 60.0
+        cost = mins * 0.006  # OpenAI transcription list price; edit in Settings if it changes
+        db.add_usage(0, 0, cost); acc({"in": 0, "out": 0}, cost)
+    return result
+
+def do_synthesize(text, cfg):
+    """Cost-tracked TTS — only meters when the configured engine is API-based."""
+    ic = cfg.get("interview_coach", {})
+    engine = ic.get("tts_engine", "local_pyttsx3")
+    audio = voice_io.synthesize(text, engine=engine, voice=ic.get("tts_voice"),
+                                api_key=llm.get_api_key(), base_url=ic.get("tts_base_url"))
+    if engine == "openai_api":
+        cost = (len(text) / 1000.0) * 0.015  # OpenAI tts-1 list price per 1K chars
+        db.add_usage(0, 0, cost); acc({"in": 0, "out": 0}, cost)
+    return audio
 
 def render_prep(r, cfg, mode, cap):
     """Application Prep Pack: show the form's REAL questions, draft editable answers,
@@ -195,9 +242,10 @@ with m6:
         st.success(f"Done · {result['ingested']} ingested · {result['scored']} newly scored")
         st.rerun()
 
-tab_review, tab_analytics, tab_cv, tab_settings, tab_tracker = st.tabs(
+tab_review, tab_analytics, tab_cv, tab_settings, tab_tracker, tab_interview = st.tabs(
     [f"{ui.icon('review')} Review Queue", f"{ui.icon('analytics')} Analytics",
-     f"{ui.icon('cv')} CV", f"{ui.icon('settings')} Settings", f"{ui.icon('tracker')} Tracker"])
+     f"{ui.icon('cv')} CV", f"{ui.icon('settings')} Settings", f"{ui.icon('tracker')} Tracker",
+     f"{ui.icon('apply')} Interview Coach"])
 
 # ===================== REVIEW QUEUE =====================
 with tab_review:
@@ -809,6 +857,33 @@ with tab_settings:
             (st.success if ok else st.error)(f"{'Connected' if ok else 'Failed'}: {msg}")
 
     st.divider()
+    st.subheader("Interview Coach — voice engines")
+    st.caption("Local runs offline and free. API is optional, reuses the tailoring key above, and "
+              "is metered against the same daily cap.")
+    ic = cfg.get("interview_coach", {})
+    vc1, vc2 = st.columns(2)
+    stt_engine = vc1.radio("Speech-to-text", ["local_whisper", "openai_api"],
+                           index=0 if ic.get("stt_engine", "local_whisper") == "local_whisper" else 1,
+                           format_func=lambda k: voice_io.STT_ENGINES[k]["label"])
+    tts_engine = vc2.radio("Text-to-speech", ["local_pyttsx3", "openai_api"],
+                           index=0 if ic.get("tts_engine", "local_pyttsx3") == "local_pyttsx3" else 1,
+                           format_func=lambda k: voice_io.TTS_ENGINES[k]["label"])
+    tts_voice = None
+    if tts_engine == "openai_api":
+        tts_voice = st.selectbox("Voice", ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+                                 index=["alloy","echo","fable","onyx","nova","shimmer"].index(
+                                     ic.get("tts_voice","alloy")) if ic.get("tts_voice") in
+                                     ["alloy","echo","fable","onyx","nova","shimmer"] else 0)
+    if st.button("Save voice settings"):
+        cfg["interview_coach"] = {"stt_engine": stt_engine, "tts_engine": tts_engine,
+                                  "tts_voice": tts_voice}
+        settings.save_config(cfg)
+        st.success("Saved.")
+    if stt_engine == "local_whisper" or tts_engine == "local_pyttsx3":
+        st.caption("First local use may need: `pip install faster-whisper pyttsx3 "
+                  "--break-system-packages` — see HOW_TO_RUN.md.")
+
+    st.divider()
     ui.header("edit", "Application answers")
     st.caption("Stored standard answers for common form fields — shown per-role for quick copy-paste.")
     ans = cfg.get("application",{}).get("answers",{})
@@ -1231,3 +1306,259 @@ with tab_analytics:
             if st.button("Apply suggested weights"):
                 cfg["weights"] = sug["weights"]; settings.save_config(cfg)
                 st.success("Saved. Re-run the pipeline to re-score with the new weights.")
+
+# ===================== INTERVIEW COACH =====================
+with tab_interview:
+    import interview as iv
+
+    st.caption("A voice-first mock interviewer for PM rounds — grounded in your real CV and "
+               "your actual target jobs. It never praises or reassures in Realistic mode; that's "
+               "deliberate (see the discovery dossier). Submission of real applications is never "
+               "part of this — this tab only ever practices.")
+
+    api_key = llm.get_api_key()
+    if not api_key:
+        st.warning("Interview Coach always needs an LLM API key — a live interviewer can't run "
+                   "in manual copy-paste mode. Add a key in Settings to use this tab.")
+        st.stop()
+
+    if db.usage_today()["cost"] >= cap:
+        st.error(f"Daily cost cap (${cap:.2f}) already reached today — Interview Coach shares "
+                 "the same cap as tailoring. Raise it in Settings or try again tomorrow.")
+        st.stop()
+
+    ss = st.session_state
+    ss.setdefault("ic_session", None)
+    ss.setdefault("ic_session_id", None)
+    ss.setdefault("ic_stage", "setup")
+
+    # ---------------------------------------------------------------- setup
+    if ss["ic_stage"] == "setup":
+        st.subheader("Start a session")
+        loops = iv.load_loops()
+        rubrics = iv.load_rubrics()
+
+        jobs = db.ranked_jobs()
+        job_opts = {f"{j['title']} @ {j['company']} · Tier {j['tier']} · fit {j['fit']}": j for j in jobs}
+        job_pick = st.selectbox("Practice for", ["Generic practice (no specific job)"] + list(job_opts.keys()))
+        picked_job = job_opts.get(job_pick)  # None for the generic option
+
+        session_type = st.radio("Session length", ["Full loop", "Single round", "Drill (10-15 min)"],
+                                horizontal=True)
+
+        col1, col2 = st.columns(2)
+        if session_type == "Drill (10-15 min)":
+            round_type = col1.selectbox("Round type",
+                                        list(rubrics["rounds"].keys()),
+                                        format_func=lambda k: rubrics["rounds"][k]["label"])
+            loop_key = None
+        else:
+            loop_key = col1.selectbox("Loop", list(loops["loops"].keys()),
+                                      format_func=lambda k: loops["loops"][k]["label"])
+            st.caption(loops["loops"][loop_key]["description"])
+            round_type = None
+        level = col2.selectbox("Target level", ["PM", "Senior PM", "Group PM / Lead PM"], index=1)
+
+        col3, col4 = st.columns(2)
+        mode = col3.radio("Mode", ["Realistic", "Coach"], horizontal=True,
+                          help="Realistic: no hints, scored only at the end. Coach: pause and ask "
+                               "for help anytime.")
+        input_mode = col4.radio("Input", ["Text", "Voice"], horizontal=True)
+
+        if st.button("Start interview", type="primary"):
+            resume = settings.load_resume()
+            resume_summary = (f"summary: {resume.get('summary','')}\n"
+                              f"skills: {', '.join(resume.get('skills',[]))}\n"
+                              f"experience: " + "; ".join(
+                                  f"{e.get('role','')} at {e.get('company','')}"
+                                  for e in resume.get("experiences", [])))
+            try:
+                sess = iv.new_session(
+                    loop_key=loop_key or "generic",
+                    job=picked_job, resume_summary=resume_summary, level=level,
+                    mode=mode.lower(), input_mode=input_mode.lower(),
+                    session_type=("drill" if session_type.startswith("Drill")
+                                 else "single_round" if session_type == "Single round" else "full_loop"),
+                    drill_round_type=round_type)
+                sess, _q = iv.start_round(sess, llm_fn=interview_llm_text(cfg))
+                sid = f"ic_{int(datetime.datetime.now().timestamp())}"
+                db.save_interview_session(sid, sess, content_hash=picked_job["content_hash"] if picked_job else None)
+                ss["ic_session"], ss["ic_session_id"], ss["ic_stage"] = sess, sid, "active"
+                st.rerun()
+            except (iv.InterviewError, llm.LLMError) as e:
+                st.error(f"Couldn't start the session: {e}")
+
+        in_progress = db.list_interview_sessions(limit=10)
+        in_progress = [s for s in in_progress if s["status"] in ("in_progress",)]
+        if in_progress:
+            st.divider()
+            st.subheader("Resume a session")
+            for s in in_progress:
+                c1, c2 = st.columns([4, 1])
+                c1.write(f"{s['loop_key']} · {s['level']} · started {s['created_at']}")
+                if c2.button("Resume", key="resume_" + s["id"]):
+                    ss["ic_session"] = db.get_interview_session(s["id"])
+                    ss["ic_session_id"] = s["id"]
+                    ss["ic_stage"] = "report" if ss["ic_session"]["status"] == "completed" else "active"
+                    st.rerun()
+
+    # --------------------------------------------------------------- active
+    elif ss["ic_stage"] == "active":
+        sess = ss["ic_session"]
+        r = sess["rounds"][sess["current_round_idx"]]
+        rdef = iv.load_rubrics()["rounds"][r["type"]]
+
+        st.subheader(f"Round {sess['current_round_idx']+1} of {len(sess['rounds'])}: {rdef['label']}")
+        time_left = iv.time_remaining_min(sess)
+        tcol1, tcol2, tcol3 = st.columns([2, 1, 1])
+        tcol1.progress(min(1.0, max(0.0, time_left / max(r["minutes"], 1))),
+                      text=f"~{time_left:.0f} min left in this round")
+        if r["status"] == "in_progress":
+            if tcol2.button("Pause"):
+                ss["ic_session"] = iv.pause_round(sess); st.rerun()
+        elif r["status"] == "paused":
+            if tcol2.button("Resume"):
+                ss["ic_session"] = iv.resume_round(sess); st.rerun()
+        if tcol3.button("Abort session"):
+            ss["ic_session"] = iv.abort_session(sess)
+            db.save_interview_session(ss["ic_session_id"], ss["ic_session"])
+            ss["ic_stage"] = "report"
+            st.rerun()
+
+        for i, t in enumerate(r["transcript"]):
+            with st.chat_message("assistant" if t["speaker"] == "interviewer" else "user"):
+                st.write(t["text"])
+
+        # Speak only the single newest interviewer line, at most once. Looping
+        # st.audio(autoplay=True) over every historical turn risks a documented
+        # Streamlit bug where multiple autoplay calls in one run collide on
+        # auto-generated element IDs (st.audio has no `key` param to work
+        # around it) — and replaying the whole history on every rerun would be
+        # bad UX regardless.
+        if sess["input_mode"] == "voice" and r["transcript"] and r["transcript"][-1]["speaker"] == "interviewer":
+            last_idx = len(r["transcript"]) - 1
+            spoken_key = f"ic_tts_spoken_round_{sess['current_round_idx']}"
+            if ss.get(spoken_key) != last_idx:
+                try:
+                    audio = do_synthesize(r["transcript"][-1]["text"], cfg)
+                    st.audio(audio, autoplay=True)
+                    ss[spoken_key] = last_idx
+                except voice_io.VoiceError as e:
+                    st.caption(f"(voice playback unavailable: {e})")
+
+        if r["status"] == "paused":
+            st.info("Paused. Click Resume to continue — the clock is stopped.")
+        elif r["status"] == "in_progress":
+            answer_text = None
+            delivery_metrics = None
+
+            if sess["input_mode"] == "voice":
+                audio_val = st.audio_input("Record your answer", key=f"aud_{sess['current_round_idx']}_{len(r['transcript'])}")
+                if audio_val is not None:
+                    draft_key = f"ic_draft_{sess['current_round_idx']}_{len(r['transcript'])}"
+                    if draft_key not in ss:
+                        with st.spinner("Transcribing…"):
+                            try:
+                                result = do_transcribe(audio_val.getvalue(), cfg)
+                                ss[draft_key] = result
+                            except voice_io.VoiceError as e:
+                                st.error(f"Transcription failed: {e}. You can switch to Text input "
+                                        "for this answer instead.")
+                                ss[draft_key] = {"text": "", "duration_s": 0, "words": []}
+                    result = ss[draft_key]
+                    edited = st.text_area("Transcript — review and edit if needed",
+                                         value=result["text"], key=f"ic_edit_{sess['current_round_idx']}_{len(r['transcript'])}")
+                    if st.button("Submit answer", key=f"ic_submit_{sess['current_round_idx']}_{len(r['transcript'])}"):
+                        answer_text = edited
+                        delivery_metrics = voice_io.compute_delivery_metrics(
+                            edited, result.get("duration_s") or 0, result.get("words") or [])
+            else:
+                edited = st.text_area("Your answer", key=f"ic_text_{sess['current_round_idx']}_{len(r['transcript'])}")
+                if st.button("Submit answer", key=f"ic_submit_{sess['current_round_idx']}_{len(r['transcript'])}"):
+                    answer_text = edited
+
+            if answer_text and answer_text.strip():
+                try:
+                    sess, reply, round_finished, usage = iv.submit_answer(
+                        sess, answer_text, interview_llm_json(cfg), delivery_metrics=delivery_metrics)
+                    db.log_interview_turn(ss["ic_session_id"], sess["current_round_idx"],
+                                          len(r["transcript"]) - 2, "candidate", answer_text, delivery_metrics)
+                    db.log_interview_turn(ss["ic_session_id"], sess["current_round_idx"],
+                                          len(r["transcript"]) - 1, "interviewer", reply)
+                    ss["ic_session"] = sess
+                    db.save_interview_session(ss["ic_session_id"], sess,
+                                              content_hash=(sess["job"] or {}).get("content_hash"))
+
+                    if round_finished:
+                        with st.spinner("Scoring this round…"):
+                            sess, ev, _u = iv.evaluate_round(sess, interview_llm_json(cfg))
+                        sess, all_done = iv.advance_or_finish(sess)
+                        if not all_done:
+                            sess, _q = iv.start_round(sess, llm_fn=interview_llm_text(cfg))
+                        else:
+                            with st.spinner("Preparing your report…"):
+                                sess, _syn, _u2 = iv.synthesize_session(sess, interview_llm_json(cfg))
+                            ss["ic_stage"] = "report"
+                        ss["ic_session"] = sess
+                        db.save_interview_session(ss["ic_session_id"], sess)
+                    st.rerun()
+                except iv.InterviewError as e:
+                    st.error(f"Something went wrong mid-interview: {e}. Your progress so far is "
+                            "saved — you can Abort to see a partial report, or try answering again.")
+
+    # --------------------------------------------------------------- report
+    elif ss["ic_stage"] == "report":
+        sess = ss["ic_session"]
+        st.subheader(f"Session report — {sess['loop_key']} · {sess['level']}")
+        st.caption(f"Status: {sess['status']}")
+
+        for i, r in enumerate(sess["rounds"]):
+            if not r.get("eval"):
+                continue
+            ev = r["eval"]
+            verdict_color = {"strong_hire": "green", "hire": "blue",
+                            "no_hire": "orange", "strong_no_hire": "red"}.get(ev["hire_bar_verdict"], "gray")
+            st.markdown(f"### Round {i+1}: {ev.get('round_label', r['type'])} — "
+                       f":{verdict_color}[{ev['hire_bar_verdict'].replace('_',' ').title()}]")
+            st.caption(ev.get("verdict_reason", ""))
+            for k, v in ev["dimension_scores"].items():
+                score_txt = f"{v['score']}/4" if v["score"] is not None else "not scorable"
+                st.markdown(f"**{k.replace('_',' ').title()}: {score_txt}**")
+                if v["evidence_quote"]:
+                    st.caption(f'"{v["evidence_quote"]}" — {v["justification"]}')
+                else:
+                    st.caption(v["justification"])
+            if ev.get("round_strengths"):
+                st.markdown("**Strengths:** " + "; ".join(ev["round_strengths"]))
+            if ev.get("round_weaknesses"):
+                st.markdown("**Weaknesses:** " + "; ".join(ev["round_weaknesses"]))
+            st.divider()
+
+        if sess.get("synthesis"):
+            syn = sess["synthesis"]
+            st.markdown("## Overall")
+            st.write(syn.get("overall_summary", ""))
+            if syn.get("top_strengths"):
+                st.markdown("**Lean on:** " + "; ".join(syn["top_strengths"]))
+            if syn.get("top_fixes"):
+                st.markdown("**Fix next:** " + "; ".join(syn["top_fixes"]))
+            if syn.get("recommended_next_drill"):
+                st.info(f"Recommended next drill: {syn['recommended_next_drill']}")
+
+        candidate_metrics = [t.get("delivery_metrics") for r in sess["rounds"]
+                             for t in r["transcript"]
+                             if t["speaker"] == "candidate" and t.get("delivery_metrics")]
+        if candidate_metrics:
+            st.markdown("## Delivery")
+            wpms = [m["wpm"] for m in candidate_metrics if m.get("wpm")]
+            fillers = [m["filler_count"] for m in candidate_metrics if m.get("filler_count") is not None]
+            dc1, dc2, dc3 = st.columns(3)
+            if wpms: dc1.metric("Avg. words/min", f"{sum(wpms)/len(wpms):.0f}")
+            if fillers: dc2.metric("Total fillers", sum(fillers))
+            dc3.metric("Answers analyzed", len(candidate_metrics))
+
+        if st.button("Start a new session"):
+            for k in list(ss.keys()):
+                if k.startswith("ic_") or k.startswith("tts_played_") or k.startswith("aud_"):
+                    del ss[k]
+            st.rerun()

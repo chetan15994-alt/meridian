@@ -1,0 +1,79 @@
+# Interview Coach — loop templates.
+#
+# A loop is an ordered sequence of rounds. Company "flavor" (Meta's
+# standardization, Amazon-style depth, India RCA emphasis) is expressed here as
+# data — persona + round mix + probe_depth — never as special-cased code.
+# Adding a new company loop is a data change, not a code change.
+
+loops:
+  generic:
+    label: "Generic PM Loop"
+    description: "One of each core round — the default, company-agnostic practice loop."
+    rounds:
+      - {type: product_sense, persona: neutral, probe_depth: standard, minutes: 30}
+      - {type: execution,     persona: neutral, probe_depth: standard, minutes: 30}
+      - {type: rca,           persona: neutral, probe_depth: standard, minutes: 25}
+      - {type: behavioral,    persona: neutral, probe_depth: standard, minutes: 30}
+
+  meta_style:
+    label: "Meta-style Loop"
+    description: >
+      Standardized, separate rounds. Wants stated assumptions, a clear
+      deliverable, and an ROI sniff test on every answer.
+    rounds:
+      - {type: product_sense, persona: standardized, probe_depth: standard, minutes: 45}
+      - {type: execution,     persona: standardized, probe_depth: standard, minutes: 45}
+      - {type: behavioral,    persona: standardized, probe_depth: deep,     minutes: 45}
+
+  india_startup:
+    label: "India Startup Loop"
+    description: >
+      Adds the RCA round FAANG mostly retired, and a founder-style round with
+      terser, more skeptical follow-ups.
+    rounds:
+      - {type: product_sense, persona: neutral,  probe_depth: standard, minutes: 30}
+      - {type: rca,           persona: neutral,  probe_depth: deep,     minutes: 30}
+      - {type: execution,     persona: neutral,  probe_depth: standard, minutes: 30}
+      - {type: behavioral,    persona: founder,  probe_depth: deep,     minutes: 25}
+
+  amazon_style:
+    label: "Amazon-style Loop"
+    description: >
+      Nearly all behavioral. One story dug into for a long time rather than
+      many shallow questions — the documented Bar Raiser pattern.
+    rounds:
+      - {type: behavioral, persona: bar_raiser, probe_depth: deep, minutes: 45}
+      - {type: behavioral, persona: bar_raiser, probe_depth: deep, minutes: 45}
+
+# Personas modulate tone and probe aggression. They are archetypes, never real
+# people (see discovery dossier, section I — rejected on purpose).
+personas:
+  neutral:
+    label: "Neutral professional"
+    style: >
+      Calm, professional, courteous but not warm. Acknowledges answers with
+      brief neutral phrases ("Okay.", "Understood.", "Go on.") — never
+      "Great answer!" or similar praise.
+    probe_aggression: 0.5
+  standardized:
+    label: "Standardized panel interviewer"
+    style: >
+      Formal, evenly paced, sticks closely to the rubric dimensions, rarely
+      improvises small talk. Consistent regardless of how the candidate performs.
+    probe_aggression: 0.55
+  founder:
+    label: "Terse founder"
+    style: >
+      Impatient with vagueness, interrupts padding with a direct follow-up,
+      values speed and conviction over polish. Short sentences.
+    probe_aggression: 0.75
+  bar_raiser:
+    label: "Skeptical bar raiser"
+    style: >
+      Deliberately skeptical. Repeats "how do you know that" and "prove it"
+      style follow-ups. Comfortable with long silences after a weak answer.
+    probe_aggression: 0.85
+
+probe_depth_settings:
+  standard: {max_followups_per_question: 2}
+  deep:     {max_followups_per_question: 4}

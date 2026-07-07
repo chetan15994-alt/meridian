@@ -1,0 +1,72 @@
+# Interview Coach — seed question bank.
+#
+# JD-grounded and CV-grounded questions are generated live by the LLM from the
+# candidate's actual job queue and resume (see interview_prompts.py) — that's
+# the real differentiator (discovery dossier, section F). These are the
+# fallback/generic/drill questions used when no specific job is selected, plus
+# the curveball and probe-ladder DATA that keeps follow-ups consistent without
+# hardcoding them into prompt strings.
+#
+# provenance: "seed" for everything below. Real questions logged from actual
+# interviews (via the future debrief flow) get provenance "debrief" and a date,
+# and are added to this same structure without any code change.
+
+opening_questions:
+  product_sense:
+    - text: "Design a way to help people find a roommate in a new city."
+      provenance: seed
+    - text: "How would you improve the experience of returning an online order?"
+      provenance: seed
+    - text: "A ride-hailing app wants to launch a new product for elderly riders. Where do you start?"
+      provenance: seed
+    - text: "What should your current company build next, and why?"
+      provenance: seed
+
+  execution:
+    - text: "Define the north star metric for a food-delivery app's loyalty program, and the guardrails you'd set alongside it."
+      provenance: seed
+    - text: "Weekly active users are flat but revenue is up 20%. Walk me through how you'd investigate and what you'd prioritize next quarter."
+      provenance: seed
+    - text: "You have two engineers for one quarter and three roadmap items. How do you decide?"
+      provenance: seed
+
+  rca:
+    - text: "Daily orders on the platform dropped 15% yesterday compared to the same day last week. Walk me through how you'd figure out why."
+      provenance: seed
+    - text: "Signup conversion on the mobile app fell 8 points over the last month. Diagnose it."
+      provenance: seed
+    - text: "Customer support tickets doubled overnight for one product line. What's your first move?"
+      provenance: seed
+
+  behavioral:
+    - text: "Tell me about a time you shipped something that didn't work. What happened?"
+      provenance: seed
+    - text: "Tell me about a time you disagreed with an engineering or design lead. How did it resolve?"
+      provenance: seed
+    - text: "Tell me about a decision you made with incomplete data. How did it turn out?"
+      provenance: seed
+    - text: "Tell me about a time you had to say no to a stakeholder who outranked you."
+      provenance: seed
+
+curveballs:
+  product_sense:
+    - "Your proposed solution is working well in one city but isn't scaling to a second, very different market. What now?"
+    - "Leadership tells you this has to work on a very limited engineering budget. What do you cut?"
+    - "A senior stakeholder disagrees with your target user segment. Defend your choice or change it."
+  execution:
+    - "The metric you defined is up, but a related guardrail metric just dropped. How do you respond?"
+    - "Your prioritization just got overridden by a VP for a reason you think is wrong. What do you do?"
+  rca:
+    - "The obvious hypothesis you were converging on turns out to be a red herring — that number was actually flat. Keep going."
+    - "It turns out this exact drop also happened one year ago on the same date. Does that change your diagnosis?"
+  behavioral:
+    - "The person you're describing this conflict with tells the story completely differently. React to that."
+    - "What would your manager at the time say was the one thing you underestimated?"
+
+probe_ladder_guidance: >
+  When following up on an answer, escalate through stages rather than
+  repeating the same kind of question: (1) ask for the exact metric or number
+  behind a claim, (2) ask how they know that number is right or how they
+  verified it, (3) pose a counterfactual ("what if that hadn't been true"),
+  (4) ask what they would do differently now. Never move to the next stage
+  until the current one has been addressed or clearly evaded.

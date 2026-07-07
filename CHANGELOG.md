@@ -2,6 +2,76 @@
 
 All notable changes. Newest first.
 
+## v1.18.0  — Interview Coach: voice-first AI mock interviewer for PM rounds
+
+**Feature, not a demo.** A structured, multi-round mock interviewer covering the four core PM
+round types (Product Sense, Execution/Analytical, RCA/diagnosis, Behavioral), voice-first via
+Streamlit's native `st.audio_input`/`st.audio` (no custom JS component, no WebRTC), grounded in
+your real CV and your actual target jobs from the Review Queue. Never praises or reassures in
+Realistic mode — that's structural, not a prompt suggestion (see rationale below).
+
+**Researched before building, not assumed:**
+- Verified `st.audio_input` is a native, current Streamlit widget (record button, returns WAV
+  bytes) — no custom component or streaming/VAD complexity needed. Since we get a COMPLETE clip
+  per turn, STT is a simple batch call, not real-time streaming.
+- Verified a concrete, current stack rather than picking categories: local `faster-whisper` (STT)
+  + local `pyttsx3`/Windows SAPI5 (TTS) as the free/offline default; OpenAI's transcription/speech
+  endpoints as the optional API tier — deliberately reusing the SAME credential already saved for
+  tailoring, so voice is a Settings toggle, not a new vendor signup.
+- Found and worked around a documented Streamlit bug: multiple `st.audio(autoplay=True)` calls in
+  one script run can collide on auto-generated element IDs (no `key` param exists to fix it) — the
+  UI speaks only the single newest interviewer line, once, never loops autoplay over history.
+
+**New modules:**
+- `interview_content/` (rubrics.yaml, loops.yaml, question_bank.yaml) — anchored 1-4 scoring
+  rubrics per round type, loop templates (Generic, Meta-style, India-Startup, Amazon-style) as
+  DATA (a new company loop is a data change, never a code change), seed questions + curveballs +
+  probe-ladder guidance. `interview.validate_content()` sanity-checks all three stay consistent.
+- `interview_prompts.py` — every LLM prompt, kept to 3 deliberately separate calls (interviewer
+  turn, round evaluator, session synthesis). Anti-sycophancy is structural: the interviewer prompt
+  forbids praise outright, and the evaluator prompt REQUIRES a verbatim transcript quote for every
+  score — unfalsifiable feedback is refused, not just discouraged.
+- `interview.py` — the pure engine (rounds -> turns -> evaluation -> synthesis), zero I/O, fully
+  testable with an injected fake LLM. The engine — not the model — enforces the follow-up budget
+  and the wall-clock wrap-up, so a misbehaving reply can never turn a 45-minute round unbounded;
+  verified with a fake LLM that never stops probing (engine forces `move_on` anyway) and a round
+  clock forced 999 minutes over budget (forces `wrap_up` WITHOUT even calling the LLM). Evaluator
+  validation rejects any score missing an evidence quote and never defaults an invalid hire-bar
+  verdict to something flattering — both proven with a deliberately bad evaluator reply.
+- `voice_io.py` — STT/TTS adapter registry (local-first, API optional) + local, zero-cost delivery
+  metrics (WPM, filler-word rate, hedging phrases, pause distribution) that degrade honestly to
+  `None`/empty rather than fabricating numbers when timing data isn't available.
+- `db.py` — additive `migrate_v16`: `interview_sessions` (whole engine state as JSON — the engine
+  and its persistence can never drift apart) + `interview_turns` (denormalized for future delivery
+  trend analytics). Fixed a real bug found in review: `save_interview_session` used
+  `INSERT OR REPLACE`, and callers that omit `content_hash` on a later save (abort, post-eval) would
+  have silently NULLed out the job association from an earlier save — fixed by deriving it from the
+  session's own stored job data when not explicitly passed, closing the whole bug class at the
+  source rather than patching every call site.
+- `app.py` — new **Interview Coach** tab: setup (job/loop/level/mode/input picker) -> active
+  session (chat-style transcript, pause/resume/abort, text or voice input, TTS playback of the
+  interviewer) -> report (per-round rubric scores with evidence quotes, hire-bar verdict, overall
+  strengths/fixes, delivery report). New Settings section for STT/TTS engine choice. This is the
+  first Meridian feature that always requires an API key — cost-tracked and capped through the
+  exact same daily-cap infrastructure as tailoring; the tab refuses to start in manual mode or once
+  the cap is already hit, with a clear message either way.
+- Two structural bugs found and fixed during review (not just by the automated tests): the autoplay
+  collision above, and a session-state key rename that fell outside the "start a new session"
+  cleanup filter — would have silently skipped voice playback of a fresh session's opening question
+  whenever a stale round-index key collided. Both are now covered by a permanent regression test.
+
+**What's tested vs. what needs your live check:** the entire engine (rubrics, loops, decisions,
+timing, evaluation, synthesis) and all of voice_io's logic (delivery metrics, adapter interfaces)
+are fully tested offline with injected fakes — 66/66 tests passing, +21 new. What's NOT and CANNOT
+be tested here: real audio capture/playback, real faster-whisper/pyttsx3 output quality, and the
+Streamlit UI rendering itself (no audio hardware or streamlit in this sandbox, as always). Try it
+on a Tier-A job from your queue and confirm voice capture, transcription, and playback all work
+before relying on it for real interview prep.
+
+**Explicitly rejected, on purpose (see discovery dossier, section I):** live-interview answer
+feeding, real-interview recording, video/body-language analysis, voice-cloning real interviewers,
+full-duplex/barge-in voice. This coaches; it never assists during a real interview.
+
 ## v1.17.0  — GitHub sync (docs + packaging only; zero application-code changes)
 
 - **New `HOW_TO_RUN.md`** — was referenced by PROJECT_STATE.md as an existing doc but had never

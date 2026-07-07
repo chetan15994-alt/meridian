@@ -60,6 +60,7 @@ def init_db():
     migrate()
     migrate_v14()
     migrate_v15()
+    migrate_v16()
 
 def add_document(doc_type, path, company="", title="", content_hash=None, label="", mode=""):
     """Register a generated/uploaded document for cataloguing, versioning and download."""
@@ -261,6 +262,121 @@ def get_prep_pack(content_hash):
         return pack
     except Exception:
         return None
+
+def migrate_v16():
+    """Interview Coach storage. `interview_sessions` stores the whole engine
+    session dict as JSON (it's already a plain, versioned, JSON-serializable
+    state — see interview.py) so the engine and its persistence never drift
+    out of sync with each other. `interview_turns` denormalizes individual
+    turns for querying/analytics (e.g. filler-word trends over time) without
+    needing to parse every session's JSON blob."""
+    with conn() as c:
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS interview_sessions(
+            id TEXT PRIMARY KEY,
+            content_hash TEXT,
+            loop_key TEXT, session_type TEXT, level TEXT, mode TEXT, input_mode TEXT,
+            status TEXT, session_json TEXT,
+            created_at TEXT, updated_at TEXT,
+            FOREIGN KEY(content_hash) REFERENCES jobs(content_hash)
+        );
+        CREATE TABLE IF NOT EXISTS interview_turns(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT, round_index INTEGER, turn_index INTEGER,
+            speaker TEXT, text TEXT, delivery_metrics_json TEXT, at TEXT,
+            FOREIGN KEY(session_id) REFERENCES interview_sessions(id)
+        );
+        """)
+
+def save_interview_session(session_id, session, content_hash=None):
+    """Upsert the full session state. Called after every turn so a browser
+    refresh or crash never loses more than the in-flight turn (pause/abort
+    with dignity — discovery dossier G).
+
+    content_hash defaults to the job already stored inside the session dict
+    itself when the caller doesn't pass one explicitly — this table uses
+    INSERT OR REPLACE, so a caller forgetting to pass content_hash on a later
+    save would otherwise silently NULL out the job association from an
+    earlier save. Deriving it from the session's own data removes that whole
+    class of bug at the source instead of relying on every call site to
+    remember."""
+    migrate_v16()
+    if content_hash is None:
+        content_hash = (session.get("job") or {}).get("content_hash")
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    with conn() as c:
+        row = c.execute("SELECT created_at FROM interview_sessions WHERE id=?",
+                        (session_id,)).fetchone()
+        created_at = row["created_at"] if row else now
+        c.execute("""INSERT OR REPLACE INTO interview_sessions
+                     (id,content_hash,loop_key,session_type,level,mode,input_mode,
+                      status,session_json,created_at,updated_at)
+                     VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                  (session_id, content_hash, session.get("loop_key"), session.get("session_type"),
+                   session.get("level"), session.get("mode"), session.get("input_mode"),
+                   session.get("status"), json.dumps(session), created_at, now))
+
+def get_interview_session(session_id):
+    migrate_v16()
+    with conn() as c:
+        row = c.execute("SELECT session_json, updated_at FROM interview_sessions WHERE id=?",
+                        (session_id,)).fetchone()
+    if not row:
+        return None
+    try:
+        session = json.loads(row["session_json"])
+        session["_updated_at"] = row["updated_at"]
+        return session
+    except Exception:
+        return None
+
+def list_interview_sessions(content_hash=None, limit=20):
+    """Most recent sessions first, optionally filtered to one job — used by
+    both the resume-a-session picker and the progress-tracking view."""
+    migrate_v16()
+    with conn() as c:
+        if content_hash:
+            rows = c.execute("""SELECT id,loop_key,session_type,level,mode,status,
+                                       created_at,updated_at
+                                FROM interview_sessions WHERE content_hash=?
+                                ORDER BY updated_at DESC LIMIT ?""",
+                             (content_hash, limit)).fetchall()
+        else:
+            rows = c.execute("""SELECT id,loop_key,session_type,level,mode,status,
+                                       created_at,updated_at
+                                FROM interview_sessions ORDER BY updated_at DESC LIMIT ?""",
+                             (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+def log_interview_turn(session_id, round_index, turn_index, speaker, text, delivery_metrics=None):
+    """Denormalized per-turn log for analytics (filler/WPM trends over time)
+    without re-parsing every session's JSON blob."""
+    migrate_v16()
+    with conn() as c:
+        c.execute("""INSERT INTO interview_turns
+                     (session_id,round_index,turn_index,speaker,text,delivery_metrics_json,at)
+                     VALUES (?,?,?,?,?,?,?)""",
+                  (session_id, round_index, turn_index, speaker, text,
+                   json.dumps(delivery_metrics) if delivery_metrics else None,
+                   datetime.datetime.now().isoformat(timespec="seconds")))
+
+def delivery_metrics_trend(limit=200):
+    """Recent candidate turns with delivery metrics, oldest first — directional
+    only (same small-sample honesty as the existing analytics tab)."""
+    migrate_v16()
+    with conn() as c:
+        rows = c.execute("""SELECT at, delivery_metrics_json FROM interview_turns
+                            WHERE speaker='candidate' AND delivery_metrics_json IS NOT NULL
+                            ORDER BY at DESC LIMIT ?""", (limit,)).fetchall()
+    out = []
+    for r in rows:
+        try:
+            m = json.loads(r["delivery_metrics_json"])
+            m["at"] = r["at"]
+            out.append(m)
+        except Exception:
+            continue
+    return list(reversed(out))
 
 def due_followups():
     """Applications + outreach whose follow-up date is today or earlier and still active."""
