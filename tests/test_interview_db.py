@@ -46,6 +46,30 @@ def test_interview_migration_is_idempotent(tmp_db):
     db.migrate_v16()  # must not raise
 
 
+def test_job_picker_options_excludes_heavy_columns(tmp_db):
+    """The dropdown-only query must never carry jd_text — that's the whole
+    point of this function existing separately from ranked_jobs."""
+    db = tmp_db
+    db.upsert_job({"content_hash": "h1", "source": "greenhouse", "company": "Acme",
+                  "title": "Senior PM", "location": "Bengaluru", "url": "u",
+                  "jd_text": "x" * 5000, "posted_at": ""})
+    db.save_score("h1", {"fit": 80, "semantic": 1, "keywords": 1, "skills": 1, "seniority": 1,
+                         "tier": "A", "missing_keywords": [], "missing_skills": [], "rationale": ""})
+    opts = db.job_picker_options()
+    assert "jd_text" not in opts[0]
+    assert opts[0]["company"] == "Acme" and opts[0]["fit"] == 80
+
+
+def test_get_job_returns_full_row_and_none_for_missing(tmp_db):
+    db = tmp_db
+    db.upsert_job({"content_hash": "h1", "source": "greenhouse", "company": "Acme",
+                  "title": "Senior PM", "location": "Bengaluru", "url": "u",
+                  "jd_text": "full jd text here", "posted_at": ""})
+    full = db.get_job("h1")
+    assert full["jd_text"] == "full jd text here"
+    assert db.get_job("does-not-exist") is None
+
+
 def test_content_hash_survives_a_save_that_omits_it(tmp_db):
     """save_interview_session uses INSERT OR REPLACE. A caller that forgets to
     pass content_hash on a later save (e.g. abort, post-evaluation) must NOT

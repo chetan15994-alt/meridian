@@ -20,6 +20,18 @@ def price_for(cfg):
     tc=cfg.get("tailoring",{})
     if isinstance(tc.get("price"),dict): return tc["price"]
     return llm.provider_price(tc.get("provider",""), tc.get("model",""))
+
+@st.cache_data(ttl=120)
+def cached_job_picker_options():
+    """Streamlit-cached, lightweight job list for dropdowns (Interview Coach's
+    job picker, etc.) — a few hundred jobs' full JD text otherwise gets
+    re-queried from SQLite on EVERY widget interaction anywhere in the app
+    (Streamlit reruns the whole script top-to-bottom on any click, in any
+    tab), which is real, avoidable overhead at this row count. Invalidated
+    explicitly right after 'Run pipeline now' so new/rescored jobs show up
+    immediately rather than waiting out the TTL."""
+    return db.job_picker_options()
+
 def sess(): return st.session_state.setdefault("usage", {"in":0,"out":0,"cost":0.0,"calls":0})
 def acc(u,c):
     s=sess(); s["in"]+=u.get("in",0); s["out"]+=u.get("out",0); s["cost"]+=c; s["calls"]+=1
@@ -229,7 +241,7 @@ m2.metric("Tier A (total)", s["by_tier"].get("A",0), help="All Tier-A roles ever
 m3.metric("Applied", s["applied"]); m4.metric("Follow-ups due", n_due)
 m5.metric("Today's cost", f"${u['cost']:.3f}", help=f"cap ${cap:.2f}")
 with m6:
-    if st.button("▶ Run pipeline now", use_container_width=True, type="primary"):
+    if st.button("▶ Run pipeline now", width='stretch', type="primary"):
         bar = st.progress(0.0, text="Starting…")
         def _cb(stage, i, total, msg):
             frac = (i/total)*0.5 if stage=="discover" else 0.5 + (i/total)*0.5
@@ -237,6 +249,7 @@ with m6:
             try: bar.progress(min(max(frac,0.0),1.0), text=f"{label}: {msg} ({i}/{total})")
             except Exception: pass
         result = runner.main(on_progress=_cb)
+        st.cache_data.clear()  # job_picker_options etc. must reflect the new run immediately
         bar.empty()
         st.session_state["last_report"] = result
         st.success(f"Done · {result['ingested']} ingested · {result['scored']} newly scored")
@@ -453,7 +466,7 @@ with tab_review:
             "hash": r["content_hash"],
         } for r in rows])
         edited = st.data_editor(
-            _df, use_container_width=True, hide_index=True, height=min(440, 60+len(rows)*35),
+            _df, width='stretch', hide_index=True, height=min(440, 60+len(rows)*35),
             column_config={
                 "Pick": st.column_config.CheckboxColumn("Act", help="Tick to act on this row", width="small"),
                 "Fit": st.column_config.ProgressColumn("Fit", min_value=0, max_value=100, format="%d"),
@@ -472,24 +485,24 @@ with tab_review:
                 job={k:sel[k] for k in ["company","title","location","url","jd_text"]}; job["content_hash"]=sel["content_hash"]
                 scd={"missing_keywords":loads(sel["missing_keywords"]),"missing_skills":loads(sel["missing_skills"])}
                 if sel.get("url"):
-                    a1.link_button(f"{ui.icon('open')} Open job", sel["url"], use_container_width=True)
+                    a1.link_button(f"{ui.icon('open')} Open job", sel["url"], width='stretch')
                 else:
-                    a1.button(f"{ui.icon('open')} Open job", disabled=True, use_container_width=True, help="No link")
+                    a1.button(f"{ui.icon('open')} Open job", disabled=True, width='stretch', help="No link")
                 if mode=="api":
-                    if a2.button(f"{ui.icon('tailor')} Tailor CV", key="bar_tl", use_container_width=True):
+                    if a2.button(f"{ui.icon('tailor')} Tailor CV", key="bar_tl", width='stretch'):
                         with st.spinner("Tailoring…"):
                             try:
                                 rp,cp,notes,c,us=do_tailor(job,scd,cfg); db.set_app(sel["content_hash"],resume_path=rp,cover_path=cp)
                                 st.success(f"Tailored · ${c:.4f}. See CV documents to download."); st.rerun()
                             except llm.LLMError as e: st.error(str(e))
-                    if a3.button(f"{ui.icon('cover')} Cover letter", key="bar_cl", use_container_width=True):
+                    if a3.button(f"{ui.icon('cover')} Cover letter", key="bar_cl", width='stretch'):
                         with st.spinner("Generating…"):
                             try: _gen(tailor.build_outreach_prompt(job), 400, "Cover letter draft", "bar_clp_"+sel["content_hash"])
                             except Exception as e: st.error(str(e))
                 else:
-                    a2.button(f"{ui.icon('tailor')} Tailor CV", disabled=True, use_container_width=True, help="API mode only")
-                    a3.button(f"{ui.icon('cover')} Cover letter", disabled=True, use_container_width=True, help="API mode only")
-                if a4.button(f"{ui.icon('apply')} Mark applied", key="bar_ap", use_container_width=True):
+                    a2.button(f"{ui.icon('tailor')} Tailor CV", disabled=True, width='stretch', help="API mode only")
+                    a3.button(f"{ui.icon('cover')} Cover letter", disabled=True, width='stretch', help="API mode only")
+                if a4.button(f"{ui.icon('apply')} Mark applied", key="bar_ap", width='stretch'):
                     db.set_app(sel["content_hash"], status="applied",
                                applied_at=datetime.datetime.now().isoformat(timespec="seconds"))
                     st.success("Marked applied."); st.rerun()
@@ -738,7 +751,7 @@ with tab_settings:
     auto_q = connectors.build_queries(cfg.get("role_keywords",[]), cfg.get("locations",[]))
     st.caption(f"Auto queries that will run: _{', '.join(auto_q)}_")
     jb1, jb2 = st.columns(2)
-    if jb1.button("Save web-wide settings", use_container_width=True):
+    if jb1.button("Save web-wide settings", width='stretch'):
         cfg["jsearch"] = {"enabled":bool(js_enabled), "provider":js_provider, "base_url":js_base,
                           "country":js_country.strip() or "in", "date_posted":js_posted,
                           "num_pages":int(js_pages),
@@ -746,7 +759,7 @@ with tab_settings:
         settings.save_config(cfg)
         if js_key.strip(): connectors.save_jsearch_key(js_key.strip())
         st.success("Saved. Web-wide search will run on the next pipeline run.")
-    if jb2.button("Save & Test JSearch", type="primary", use_container_width=True):
+    if jb2.button("Save & Test JSearch", type="primary", width='stretch'):
         if js_key.strip(): connectors.save_jsearch_key(js_key.strip())
         cfg["jsearch"] = {**cfg.get("jsearch",{}), "enabled":bool(js_enabled), "provider":js_provider,
                           "base_url":js_base, "country":js_country.strip() or "in",
@@ -847,10 +860,10 @@ with tab_settings:
             if key.strip(): llm.save_api_key(key.strip())
 
         d1,d2=st.columns(2)
-        if d1.button("Save backend", use_container_width=True):
+        if d1.button("Save backend", width='stretch'):
             _persist()
             st.success(f"Saved — tailoring via {prov} · {model} ({api_style} API).")
-        if d2.button("Save & Test connection", type="primary", use_container_width=True):
+        if d2.button("Save & Test connection", type="primary", width='stretch'):
             _persist()                          # <-- saves the key FIRST (fixes the 401)
             with st.spinner("Testing..."):
                 ok,msg=llm.health(base,model,api=api_style,api_key=(key.strip() or llm.get_api_key()))
@@ -1115,7 +1128,7 @@ with tab_cv:
             box(f"**{i['field']}**: {i['message']}")
             fix_key = f"fix_{i['field']}"
             if _can_fix and i["field"] not in ("placeholder",) and cols[1].button(
-                    "Generate fix", key=f"btn_{fix_key}", use_container_width=True):
+                    "Generate fix", key=f"btn_{fix_key}", width='stretch'):
                 with st.spinner("Drafting a fix…"):
                     try:
                         txt,us = llm.chat(tailor.build_fix_prompt(i, rdata),
@@ -1202,7 +1215,7 @@ with tab_cv:
             "Created": (d.get("created_at","") or "")[:16].replace("T"," "),
             "File": os.path.basename(d.get("path","") or ""),
         } for d in docs])
-        st.dataframe(dfd, use_container_width=True, hide_index=True, height=min(360, 60+len(docs)*35))
+        st.dataframe(dfd, width='stretch', hide_index=True, height=min(360, 60+len(docs)*35))
 
         labels = {f"#{d['id']} · {type_label.get(d['doc_type'],d['doc_type'])} · "
                   f"{(d['company']+' — '+d['title']) if d.get('company') else (d.get('title') or '-')} · "
@@ -1216,7 +1229,7 @@ with tab_cv:
                 with open(path,"rb") as f:
                     cd1.download_button(f"{ui.icon('download')} Download", f,
                                         file_name=os.path.basename(path), key=f"dlcat_{chosen['id']}",
-                                        use_container_width=True)
+                                        width='stretch')
                 if path.endswith(".txt"):
                     with cd2.expander("View contents"):
                         st.text(open(path, encoding="utf-8").read())
@@ -1224,7 +1237,7 @@ with tab_cv:
                     cd2.caption("Word document — download to view.")
             else:
                 cd1.caption("File missing on disk.")
-            if cd1.button("Delete", key=f"delcat_{chosen['id']}", use_container_width=True):
+            if cd1.button("Delete", key=f"delcat_{chosen['id']}", width='stretch'):
                 db.delete_document(chosen["id"]); st.rerun()
 
         with st.expander(f"{ui.icon('compare')} Compare two CV versions (field-level diff)"):
@@ -1244,7 +1257,7 @@ with tab_cv:
                     if not changes:
                         st.success("No differences between these two versions.")
                     else:
-                        st.dataframe(_pd.DataFrame(changes), use_container_width=True, hide_index=True)
+                        st.dataframe(_pd.DataFrame(changes), width='stretch', hide_index=True)
 
 # ===================== ANALYTICS =====================
 with tab_analytics:
@@ -1338,10 +1351,11 @@ with tab_interview:
         loops = iv.load_loops()
         rubrics = iv.load_rubrics()
 
-        jobs = db.ranked_jobs()
-        job_opts = {f"{j['title']} @ {j['company']} · Tier {j['tier']} · fit {j['fit']}": j for j in jobs}
+        jobs = cached_job_picker_options()
+        job_opts = {f"{j['title']} @ {j['company']} · Tier {j['tier']} · fit {j['fit']}": j["content_hash"]
+                   for j in jobs}
         job_pick = st.selectbox("Practice for", ["Generic practice (no specific job)"] + list(job_opts.keys()))
-        picked_job = job_opts.get(job_pick)  # None for the generic option
+        picked_hash = job_opts.get(job_pick)  # None for the generic option
 
         session_type = st.radio("Session length", ["Full loop", "Single round", "Drill (10-15 min)"],
                                 horizontal=True)
@@ -1365,7 +1379,27 @@ with tab_interview:
                                "for help anytime.")
         input_mode = col4.radio("Input", ["Text", "Voice"], horizontal=True)
 
+        if input_mode == "Voice":
+            ic = cfg.get("interview_coach", {})
+            status = voice_io.local_engine_status()
+            stt_engine = ic.get("stt_engine", "local_whisper")
+            tts_engine = ic.get("tts_engine", "local_pyttsx3")
+            missing = []
+            if stt_engine == "local_whisper" and not status["local_whisper"]["available"]:
+                missing.append("faster-whisper")
+            if tts_engine == "local_pyttsx3" and not status["local_pyttsx3"]["available"]:
+                missing.append("pyttsx3")
+            if missing:
+                st.warning(
+                    f"Voice is selected, but {' and '.join(missing)} "
+                    f"{'isn' if len(missing)==1 else 'aren'}'t installed yet. Install with:\n\n"
+                    f"`pip install {' '.join(missing)}`\n\n"
+                    "or switch the engine(s) to the API option in Settings → Interview Coach. "
+                    "You can still start now — affected turns will just skip voice playback/"
+                    "transcription with a clear message, nothing will crash.")
+
         if st.button("Start interview", type="primary"):
+            picked_job = db.get_job(picked_hash) if picked_hash else None
             resume = settings.load_resume()
             resume_summary = (f"summary: {resume.get('summary','')}\n"
                               f"skills: {', '.join(resume.get('skills',[]))}\n"
@@ -1382,7 +1416,7 @@ with tab_interview:
                     drill_round_type=round_type)
                 sess, _q = iv.start_round(sess, llm_fn=interview_llm_text(cfg))
                 sid = f"ic_{int(datetime.datetime.now().timestamp())}"
-                db.save_interview_session(sid, sess, content_hash=picked_job["content_hash"] if picked_job else None)
+                db.save_interview_session(sid, sess, content_hash=picked_hash)
                 ss["ic_session"], ss["ic_session_id"], ss["ic_stage"] = sess, sid, "active"
                 st.rerun()
             except (iv.InterviewError, llm.LLMError) as e:

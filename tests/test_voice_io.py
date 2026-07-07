@@ -109,3 +109,13 @@ def test_synthesize_api_with_injected_http():
 def test_synthesize_api_without_key_raises():
     with pytest.raises(vio.VoiceError):
         vio.synthesize("hi", engine="openai_api", api_key=None)
+
+
+def test_local_engine_status_never_raises_and_reports_shape():
+    """Must be safe to call on every render of the setup screen — a plain
+    import-availability check, never a model load."""
+    status = vio.local_engine_status()
+    assert set(status.keys()) == {"local_whisper", "local_pyttsx3"}
+    for k in status:
+        assert isinstance(status[k]["available"], bool)
+        assert isinstance(status[k]["error"], str)

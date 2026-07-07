@@ -72,6 +72,26 @@ def test_fresh_handles_aware_z_and_stale():
     assert ingest._fresh({"posted_at": ""}, 30)   # unknown -> keep
 
 
+def test_parallel_fetch_dedupes_even_with_duplicate_input_tokens(monkeypatch):
+    """Reproduces the exact user-reported symptom: every Personio company
+    fetched twice. Even if upstream dedup somehow fails (differently-cased
+    source keys, a future caller skipping _normalize_tokens), the fetch layer
+    itself must never call a fetcher twice for the same (source, token)."""
+    calls = []
+
+    def counting_fetch(tok):
+        calls.append(tok)
+        return [ingest._norm("personio", tok, "Senior PM", "Bengaluru, India", "u",
+                             "senior product manager role", "")]
+    monkeypatch.setitem(ingest.FETCHERS, "personio", counting_fetch)
+
+    tokens = [("personio", "postman", True, ""), ("personio", "postman", True, ""),
+              ("personio", "razorpay", True, "")]
+    ingest._parallel_fetch(tokens, None, len(tokens))
+    assert calls.count("postman") == 1
+    assert calls.count("razorpay") == 1
+
+
 def test_parallel_discover_is_deterministic_and_dedupes(monkeypatch):
     """Two tokens fetched CONCURRENTLY must yield the same jobs, in the same
     order, with cross-token dedup — identical to the old serial behaviour."""

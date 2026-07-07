@@ -528,10 +528,24 @@ def _parallel_fetch(tokens, on_progress, total):
     Progress is reported from THIS (caller's) thread as futures complete, so a
     Streamlit progress callback is never touched from a worker thread. Fetchers
     already swallow their own errors and return []; the belt-and-braces except
-    here means one crashing portal can never take down the whole run."""
+    here means one crashing portal can never take down the whole run.
+
+    Defensively deduped by (source, token) here — the LAST point before a
+    network call happens — even though _normalize_tokens already dedupes its
+    input. This guards against every upstream source of duplication at once
+    (a config edited by hand, a bulk-finder re-adding an already-present
+    token, a future caller that skips _normalize_tokens) rather than chasing
+    each one individually."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
-    fetchable = [(i, s, t) for i, (s, t, valid, _) in enumerate(tokens)
-                 if valid and FETCHERS.get(s)]
+    fetchable, seen_pairs = [], set()
+    for i, (s, t, valid, _) in enumerate(tokens):
+        if not (valid and FETCHERS.get(s)):
+            continue
+        pair = (s, t.lower() if s in _LOWER_SLUG else t)
+        if pair in seen_pairs:
+            continue
+        seen_pairs.add(pair)
+        fetchable.append((i, s, t))
     results = {}
     if not fetchable:
         return results

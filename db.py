@@ -146,6 +146,28 @@ def ranked_jobs(tier=None):
         rows = c.execute(q, (tier,) if tier else ()).fetchall()
     return [dict(r) for r in rows]
 
+def job_picker_options():
+    """Lightweight variant of ranked_jobs for dropdowns/pickers that only need
+    a label + content_hash — skips jd_text, rationale, missing_keywords, and
+    every applications column, which ranked_jobs's SELECT j.* pulls in full
+    for every row regardless of need. Meaningful at scale: a few hundred jobs
+    each carrying multi-KB JD text adds up fast when re-queried on every
+    Streamlit rerun (every widget interaction reruns the whole script)."""
+    q = """SELECT j.content_hash, j.company, j.title, s.fit, s.tier
+           FROM jobs j JOIN scores s ON j.content_hash=s.content_hash
+           ORDER BY s.fit DESC"""
+    with conn() as c:
+        rows = c.execute(q).fetchall()
+    return [dict(r) for r in rows]
+
+def get_job(content_hash):
+    """Single full job row (with jd_text) by hash — the companion to
+    job_picker_options: fetch the cheap list for a dropdown, then this ONE
+    row (not all 259) once the user actually picks something."""
+    with conn() as c:
+        row = c.execute("SELECT * FROM jobs WHERE content_hash=?", (content_hash,)).fetchone()
+    return dict(row) if row else None
+
 _APP_COLS = {"status","resume_path","prompt_path","applied_at","follow_up_at",
              "notes","cover_path","variant"}
 

@@ -2,6 +2,49 @@
 
 All notable changes. Newest first.
 
+## v1.18.1  — Fixes from a real run: Personio double-fetch, Interview Coach slowness, voice UX
+
+Diagnosed directly from a pasted terminal log of a real `python run.py` + `streamlit run app.py`
+session, not guessed at.
+
+- **FIXED: every Personio company was being fetched twice.** Counted the log line-by-line —
+  each of the ~18 Personio companies appeared in the failure output exactly twice, not once.
+  Root cause not fully pinned down without the user's actual config.yaml (candidates: a hand-edited
+  source list, or a bulk-add path that doesn't check for an existing entry), so the fix closes the
+  bug class at the last point before any network call happens instead of chasing one upstream cause:
+  `ingest._parallel_fetch` now defensively dedupes by (source, token) before submitting to the
+  thread pool, on top of `_normalize_tokens`'s existing dedup. Verified with a test that feeds the
+  exact duplicate-token shape from the log and confirms the fetcher is called once per company.
+- **FIXED: Interview Coach's job picker was measurably wasteful.** `db.ranked_jobs()` — a
+  `SELECT j.*` pulling full JD text, rationale, and every applications column for every row — was
+  being re-queried in full on every single widget interaction ANYWHERE in the app (Streamlit
+  reruns the whole script top-to-bottom on any click, in any tab; this isn't new, but Interview
+  Coach's setup form made it newly visible). New `db.job_picker_options()` (5 lightweight columns,
+  no JD text) + `db.get_job()` (fetch the ONE full row only once a job is actually picked), wrapped
+  in `st.cache_data(ttl=120)` and explicitly invalidated right after "Run pipeline now" so new
+  results show up immediately rather than waiting out the cache.
+- **FIXED: the pyttsx3 error surfaced too late.** The user hit "(voice playback unavailable:
+  pyttsx3 isn't installed...)" mid-interview, having only run `pip install -r requirements.txt`
+  (voice packages are deliberately optional/commented there) and missed the separate voice-install
+  instruction. New `voice_io.local_engine_status()` (a cheap import-only check, never loads a
+  model) now warns upfront on the Interview Coach setup screen, before a session starts, with the
+  exact install command AND the alternative of switching to the API engine in Settings — instead of
+  discovering it live, turn by turn.
+- Cleaned up 18 instances of Streamlit's deprecated `use_container_width` (flagged in the log,
+  scheduled for removal after 2025-12-31) → `width='stretch'`/`width='content'`, matching the
+  Streamlit 1.58 the user has installed. Cosmetic — was only producing log noise, not slowness.
+- **Explained, not changed:** the overall `python run.py` wall-clock time (querying 9 ATS portals
+  x ~20 target companies = ~180 combinations) is mostly inherent to how broad that search currently
+  is, not a regression from this release — the Personio fix removes real duplicate work but is a
+  small fraction of ~180 total calls. The concrete, already-available lever: run the "Batch company
+  verifier" in Settings once per company to resolve its ONE real ATS, then trim `sources` down to
+  just that portal — cutting the fetch count roughly 9x for that company on every future run.
+  Streamlit/sentence-transformers/torch import time on first launch is a separate, pre-existing
+  cost of the stack, unrelated to this release.
+
+Tests: 70/70 passing (+4 new: fetch dedup under duplicate input, lightweight picker excludes heavy
+columns, single-job lookup, local-engine-status shape).
+
 ## v1.18.0  — Interview Coach: voice-first AI mock interviewer for PM rounds
 
 **Feature, not a demo.** A structured, multi-round mock interviewer covering the four core PM

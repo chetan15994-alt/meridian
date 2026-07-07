@@ -41,6 +41,26 @@ TTS_ENGINES = {
 }
 
 
+def local_engine_status():
+    """Check whether the local STT/TTS packages are actually importable —
+    WITHOUT loading a model or touching audio hardware, so this is cheap
+    enough to call on every render of the setup screen. Lets the UI warn
+    upfront (before a session starts) instead of only failing mid-interview,
+    which is confusing and wastes a turn."""
+    stt_ok = tts_ok = True
+    stt_err = tts_err = ""
+    try:
+        import faster_whisper  # noqa: F401
+    except ImportError as e:
+        stt_ok, stt_err = False, str(e)
+    try:
+        import pyttsx3  # noqa: F401
+    except ImportError as e:
+        tts_ok, tts_err = False, str(e)
+    return {"local_whisper": {"available": stt_ok, "error": stt_err},
+           "local_pyttsx3": {"available": tts_ok, "error": tts_err}}
+
+
 class VoiceError(Exception):
     """Raised on unrecoverable STT/TTS failure. Callers should degrade to text
     mode rather than crash the session — voice is an enhancement, not a
