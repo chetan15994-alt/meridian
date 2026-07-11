@@ -69,7 +69,7 @@ class VoiceError(Exception):
 
 # ------------------------------------------------------------------- STT ---
 def transcribe(audio_bytes, engine="local_whisper", api_key=None, base_url=None,
-               model=None, whisper_fn=None, http_post_fn=None):
+               model=None, whisper_fn=None, http_post_fn=None, model_size="base"):
     """Return {"text": str, "duration_s": float, "words": [{"word","start","end"}]}.
     `words` may be empty if the engine doesn't provide timestamps — callers
     must degrade gracefully (see compute_delivery_metrics). Injectable
@@ -79,7 +79,7 @@ def transcribe(audio_bytes, engine="local_whisper", api_key=None, base_url=None,
         raise VoiceError("no audio captured")
 
     if engine == "local_whisper":
-        return _transcribe_local(audio_bytes, whisper_fn=whisper_fn)
+        return _transcribe_local(audio_bytes, whisper_fn=whisper_fn, model_size=model_size)
     if engine == "openai_api":
         return _transcribe_api(audio_bytes, api_key, base_url, http_post_fn=http_post_fn)
     raise VoiceError(f"unknown STT engine '{engine}'")
@@ -95,20 +95,29 @@ def _wav_duration_seconds(audio_bytes):
         return 0.0
 
 
-def _transcribe_local(audio_bytes, whisper_fn=None):
+def _transcribe_local(audio_bytes, whisper_fn=None, model_size="base"):
     """Local faster-whisper. Lazy-imported so the app runs without it installed.
     `whisper_fn` is an injectable stand-in for `faster_whisper.WhisperModel(...).transcribe`
-    with the same (segments, info) return shape, for offline testing."""
+    with the same (segments, info) return shape, for offline testing.
+
+    Speed choices (matter a lot on a no-GPU laptop):
+    - beam_size=1 (greedy): 2-5x faster than faster-whisper's default beam of 5,
+      with only a minor accuracy cost — the right trade for interview answers,
+      where the user reviews/edits the transcript before submitting anyway.
+    - vad_filter=True: skips silent stretches instead of decoding them.
+    - model_size defaults to 'base' (~2-3x faster than 'small' on CPU); user-
+      selectable in Settings for those who prefer accuracy over latency."""
     duration = _wav_duration_seconds(audio_bytes)
     if whisper_fn is None:
         try:
-            from faster_whisper import WhisperModel
+            from faster_whisper import WhisperModel  # noqa: F401
         except ImportError as e:
             raise VoiceError(
                 "faster-whisper isn't installed. Run: pip install faster-whisper "
                 "--break-system-packages") from e
-        model = _get_local_whisper_model()
-        segments, info = model.transcribe(io.BytesIO(audio_bytes), word_timestamps=True)
+        model = _get_local_whisper_model(model_size)
+        segments, info = model.transcribe(io.BytesIO(audio_bytes), word_timestamps=True,
+                                          beam_size=1, vad_filter=True)
     else:
         segments, info = whisper_fn(audio_bytes)
 
@@ -122,14 +131,37 @@ def _transcribe_local(audio_bytes, whisper_fn=None):
            "words": words}
 
 
-_LOCAL_WHISPER_MODEL = None
+_LOCAL_WHISPER_MODELS = {}
+_WHISPER_LOCK = None
 
-def _get_local_whisper_model():
-    global _LOCAL_WHISPER_MODEL
-    if _LOCAL_WHISPER_MODEL is None:
-        from faster_whisper import WhisperModel
-        _LOCAL_WHISPER_MODEL = WhisperModel("small", device="cpu", compute_type="int8")
-    return _LOCAL_WHISPER_MODEL
+def _get_whisper_lock():
+    global _WHISPER_LOCK
+    if _WHISPER_LOCK is None:
+        import threading
+        _WHISPER_LOCK = threading.Lock()
+    return _WHISPER_LOCK
+
+def _get_local_whisper_model(model_size="base"):
+    """Per-size model cache, guarded by a lock so a background prewarm thread
+    and a foreground transcription can never double-load the same model."""
+    with _get_whisper_lock():
+        if model_size not in _LOCAL_WHISPER_MODELS:
+            from faster_whisper import WhisperModel
+            _LOCAL_WHISPER_MODELS[model_size] = WhisperModel(
+                model_size, device="cpu", compute_type="int8")
+        return _LOCAL_WHISPER_MODELS[model_size]
+
+
+def prewarm_local_whisper(model_size="base"):
+    """Best-effort: load the model NOW (e.g. in a background thread the moment
+    a voice session starts) so the user's FIRST answer doesn't pay the 5-15s
+    model-load cost on top of transcription. Never raises — returns True if
+    the model is ready, False if faster-whisper isn't installed."""
+    try:
+        _get_local_whisper_model(model_size)
+        return True
+    except Exception:
+        return False
 
 
 def _transcribe_api(audio_bytes, api_key, base_url, http_post_fn=None):

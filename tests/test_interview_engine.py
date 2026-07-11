@@ -185,6 +185,61 @@ def test_full_session_to_synthesis():
     assert syn["top_strengths"] == ["ownership"]
 
 
+def test_deferred_evaluation_by_index_then_synthesis():
+    """v1.19.0 flow: rounds advance immediately at wrap-up (no inline eval);
+    all awaiting_eval rounds are batch-scored later by explicit index, then
+    synthesized — same total LLM calls, moved to where waiting is expected."""
+    sess = iv.new_session(loop_key="amazon_style")  # 2 rounds
+
+    def instant_wrap(prompt):
+        return ({"decision": "wrap_up", "interviewer_says": "Stop there."}, {"in": 1, "out": 1})
+
+    # Play both rounds WITHOUT evaluating between them
+    for _ in range(len(sess["rounds"])):
+        sess, _ = iv.start_round(sess, llm_fn=None)
+        sess, _, done, _ = iv.submit_answer(sess, "answer", instant_wrap)
+        assert done
+        sess, _finished = iv.advance_or_finish(sess)
+    assert sess["status"] == "completed"
+    assert all(r["status"] == "awaiting_eval" for r in sess["rounds"])
+
+    def flat_eval(prompt):
+        dims = ["ownership", "evidence", "conflict_handling", "introspection", "communication"]
+        return ({"dimension_scores": {k: {"score": 2, "evidence_quote": "x", "justification": "y"} for k in dims},
+                 "hire_bar_verdict": "hire", "verdict_reason": "avg",
+                 "round_strengths": ["s"], "round_weaknesses": ["w"]}, {"in": 1, "out": 1})
+
+    # Batch-evaluate by index (report-stage behaviour), then synthesize
+    for idx in range(len(sess["rounds"])):
+        sess, ev, _ = iv.evaluate_round(sess, flat_eval, round_idx=idx)
+        assert sess["rounds"][idx]["status"] == "completed"
+
+    def synth(prompt):
+        return ({"top_strengths": ["s"], "top_fixes": ["f"],
+                 "overall_summary": "ok", "recommended_next_drill": "d"}, {"in": 1, "out": 1})
+
+    sess, syn, _ = iv.synthesize_session(sess, synth)
+    assert syn["top_strengths"] == ["s"]
+
+
+def test_evaluate_round_by_index_requires_awaiting_eval():
+    sess = iv.new_session(loop_key="generic")
+    sess, _ = iv.start_round(sess, llm_fn=None)  # round 0 is in_progress, not awaiting_eval
+    with pytest.raises(iv.InterviewError):
+        iv.evaluate_round(sess, lambda p: ({}, {}), round_idx=0)
+
+
+def test_content_loaders_are_cached_and_clearable():
+    """The YAML loaders run on every Streamlit rerun — they must be cached
+    (same object back, no re-read) and resettable via clear_content_cache."""
+    a = iv.load_rubrics()
+    b = iv.load_rubrics()
+    assert a is b  # lru_cache returns the identical object, not a re-parse
+    iv.clear_content_cache()
+    c = iv.load_rubrics()
+    assert c == a  # same content after a clear, freshly parsed
+
+
 def test_synthesize_with_no_evaluated_rounds_raises():
     sess = iv.new_session(loop_key="generic")
     with pytest.raises(iv.InterviewError):

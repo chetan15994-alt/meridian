@@ -16,6 +16,7 @@ and the wall-clock wrap-up, so a misbehaving model reply can never turn a
 """
 
 import datetime
+import functools
 import json
 import os
 import random
@@ -34,16 +35,29 @@ class InterviewError(Exception):
 
 
 # ---------------------------------------------------------------- content ---
+# lru_cache: these are static, shipped data files, but load_* gets called on
+# every Streamlit rerun (i.e. every widget click while on the Interview tab).
+# Re-reading + re-parsing YAML each click is pure waste; the cache makes it a
+# dict lookup. clear_content_cache() exists for tests / future in-app editing.
+@functools.lru_cache(maxsize=1)
 def load_rubrics():
     return fileio.read_yaml(os.path.join(_CONTENT_DIR, "rubrics.yaml"), default={})
 
 
+@functools.lru_cache(maxsize=1)
 def load_loops():
     return fileio.read_yaml(os.path.join(_CONTENT_DIR, "loops.yaml"), default={})
 
 
+@functools.lru_cache(maxsize=1)
 def load_question_bank():
     return fileio.read_yaml(os.path.join(_CONTENT_DIR, "question_bank.yaml"), default={})
+
+
+def clear_content_cache():
+    load_rubrics.cache_clear()
+    load_loops.cache_clear()
+    load_question_bank.cache_clear()
 
 
 def _now_iso():
@@ -300,9 +314,16 @@ def _extract_decision(obj, probe_count, max_followups):
 
 
 # ------------------------------------------------------------- evaluation ---
-def evaluate_round(session, llm_json_fn):
-    """Score the just-finished round. Returns (session, round_eval dict)."""
-    r = _current_round(session)
+def evaluate_round(session, llm_json_fn, round_idx=None):
+    """Score a finished round. Returns (session, round_eval dict, usage).
+
+    round_idx=None evaluates the CURRENT round (original behaviour). Passing an
+    explicit index lets evaluation be DEFERRED: the UI can advance to the next
+    round immediately after wrap-up (one opening-question LLM call instead of
+    eval + synthesis + opening = three sequential calls, i.e. 10-30s of dead
+    air between rounds) and batch-evaluate everything at report time, where a
+    progress bar is expected anyway."""
+    r = session["rounds"][session["current_round_idx"] if round_idx is None else round_idx]
     if r["status"] != "awaiting_eval":
         raise InterviewError(f"round not ready for evaluation (status={r['status']})")
 

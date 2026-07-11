@@ -119,3 +119,29 @@ def test_local_engine_status_never_raises_and_reports_shape():
     for k in status:
         assert isinstance(status[k]["available"], bool)
         assert isinstance(status[k]["error"], str)
+
+
+def test_prewarm_is_best_effort_and_never_raises():
+    """Called from a background thread at voice-session start; if
+    faster-whisper isn't installed it must return False, never raise."""
+    assert vio.prewarm_local_whisper("base") in (True, False)
+
+
+def test_transcribe_model_size_passes_through_injectable_path():
+    class FakeWord:
+        def __init__(self, word, start, end):
+            self.word, self.start, self.end = word, start, end
+
+    class FakeSeg:
+        def __init__(self, text, words):
+            self.text, self.words = text, words
+
+    class FakeInfo:
+        duration = 1.0
+
+    def fake_whisper(audio_bytes):
+        return [FakeSeg("hi", [FakeWord("hi", 0, 0.2)])], FakeInfo()
+
+    r = vio.transcribe(b"x", engine="local_whisper", model_size="small",
+                       whisper_fn=fake_whisper)
+    assert r["text"] == "hi"

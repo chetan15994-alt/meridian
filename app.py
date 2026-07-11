@@ -91,13 +91,23 @@ def do_job_extract(raw, deterministic, cfg):
     except Exception as e:
         return deterministic, 0.0, str(e)
 
+def _interview_model(cfg):
+    """Interview turns are latency-critical in a way tailoring isn't — you're
+    mid-conversation. cfg['interview_coach']['model'] optionally overrides the
+    tailoring model for interview calls ONLY (same provider/base_url/key), so
+    a fast, cheap model (Haiku / gpt-4o-mini class) can drive the live loop
+    while tailoring keeps the higher-quality one. Empty = use tailoring model."""
+    tc = cfg.get("tailoring", {})
+    return (cfg.get("interview_coach", {}).get("model") or "").strip() or tc.get("model")
+
 def interview_llm_json(cfg):
     """Build a cost-tracked llm_json_fn closure for interview.py's injectable
     LLM parameter — every engine call (interviewer turn, evaluator, synthesis)
     is metered and capped through the SAME path as the rest of Meridian."""
     tc = cfg.get("tailoring", {})
+    model = _interview_model(cfg)
     def _fn(prompt):
-        obj, usage = llm.chat_json(prompt, tc.get("base_url"), tc.get("model"),
+        obj, usage = llm.chat_json(prompt, tc.get("base_url"), model,
                                    api=tc.get("api", "openai"), api_key=llm.get_api_key())
         cost = llm.est_cost(usage, price_for(cfg))
         db.add_usage(usage.get("in", 0), usage.get("out", 0), cost); acc(usage, cost)
@@ -107,8 +117,9 @@ def interview_llm_json(cfg):
 def interview_llm_text(cfg):
     """Same as above but for the plain-text opening-question call."""
     tc = cfg.get("tailoring", {})
+    model = _interview_model(cfg)
     def _fn(prompt):
-        text, usage = llm.chat(prompt, tc.get("base_url"), tc.get("model"),
+        text, usage = llm.chat(prompt, tc.get("base_url"), model,
                                api=tc.get("api", "openai"), api_key=llm.get_api_key())
         cost = llm.est_cost(usage, price_for(cfg))
         db.add_usage(usage.get("in", 0), usage.get("out", 0), cost); acc(usage, cost)
@@ -120,7 +131,8 @@ def do_transcribe(audio_bytes, cfg):
     ic = cfg.get("interview_coach", {})
     engine = ic.get("stt_engine", "local_whisper")
     result = voice_io.transcribe(audio_bytes, engine=engine, api_key=llm.get_api_key(),
-                                 base_url=ic.get("stt_base_url"))
+                                 base_url=ic.get("stt_base_url"),
+                                 model_size=ic.get("whisper_model", "base"))
     if engine == "openai_api":
         mins = (result.get("duration_s") or 0) / 60.0
         cost = mins * 0.006  # OpenAI transcription list price; edit in Settings if it changes
@@ -255,13 +267,20 @@ with m6:
         st.success(f"Done · {result['ingested']} ingested · {result['scored']} newly scored")
         st.rerun()
 
-tab_review, tab_analytics, tab_cv, tab_settings, tab_tracker, tab_interview = st.tabs(
-    [f"{ui.icon('review')} Review Queue", f"{ui.icon('analytics')} Analytics",
-     f"{ui.icon('cv')} CV", f"{ui.icon('settings')} Settings", f"{ui.icon('tracker')} Tracker",
-     f"{ui.icon('apply')} Interview Coach"])
+# Navigation: segmented control instead of st.tabs — st.tabs renders ALL tab
+# bodies on every rerun (every widget click, in any tab, re-executed the whole
+# app: 4x full-job fetches, the 270-row editor, CV scoring, analytics). With
+# if-guards only the ACTIVE section's code runs per interaction. The selected
+# section persists across reruns via the widget key.
+_NAV = [f"{ui.icon('review')} Review Queue", f"{ui.icon('analytics')} Analytics",
+        f"{ui.icon('cv')} CV", f"{ui.icon('settings')} Settings",
+        f"{ui.icon('tracker')} Tracker", f"{ui.icon('apply')} Interview Coach"]
+nav = st.segmented_control("Section", _NAV, default=_NAV[0], key="main_nav",
+                           label_visibility="collapsed") or _NAV[0]
+nav = nav.split(" ", 1)[1] if " " in nav else nav   # strip the icon prefix
 
 # ===================== REVIEW QUEUE =====================
-with tab_review:
+if nav == "Review Queue":
     mode = cfg.get("tailoring",{}).get("mode","manual")
     var = st.radio("Tag new applications as variant (for A/B testing)", ["A","B"],
                    index=0 if st.session_state.get("variant","A")=="A" else 1,
@@ -573,7 +592,7 @@ with tab_review:
                 render_prep(r, cfg, mode, cap)
 
 # ===================== SETTINGS =====================
-with tab_settings:
+if nav == "Settings":
     cfg = settings.load_config(); res = settings.load_resume()
 
     st.subheader("Targets")
@@ -887,9 +906,22 @@ with tab_settings:
                                  index=["alloy","echo","fable","onyx","nova","shimmer"].index(
                                      ic.get("tts_voice","alloy")) if ic.get("tts_voice") in
                                      ["alloy","echo","fable","onyx","nova","shimmer"] else 0)
+    wc1, wc2 = st.columns(2)
+    _wm_opts = ["tiny", "base", "small"]
+    whisper_model = wc1.selectbox(
+        "Local transcription model", _wm_opts,
+        index=_wm_opts.index(ic.get("whisper_model", "base")) if ic.get("whisper_model", "base") in _wm_opts else 1,
+        help="Speed vs accuracy on CPU: tiny is fastest, small most accurate. 'base' is the "
+             "recommended balance — you review/edit every transcript before submitting anyway.")
+    ic_model = wc2.text_input(
+        "Faster model for interviews (optional)", value=ic.get("model", ""),
+        placeholder="e.g. claude-haiku-4-5 / gpt-4o-mini",
+        help="Interview turns are latency-critical. Set a fast, cheap model (same provider & key "
+             "as tailoring) to drive the live loop; leave empty to use the tailoring model.")
     if st.button("Save voice settings"):
-        cfg["interview_coach"] = {"stt_engine": stt_engine, "tts_engine": tts_engine,
-                                  "tts_voice": tts_voice}
+        cfg.setdefault("interview_coach", {}).update(
+            {"stt_engine": stt_engine, "tts_engine": tts_engine, "tts_voice": tts_voice,
+             "whisper_model": whisper_model, "model": ic_model.strip()})
         settings.save_config(cfg)
         st.success("Saved.")
     if stt_engine == "local_whisper" or tts_engine == "local_pyttsx3":
@@ -970,7 +1002,7 @@ with tab_settings:
         settings.save_resume(res); st.rerun()
 
 # ===================== TRACKER =====================
-with tab_tracker:
+if nav == "Tracker":
     due = db.due_followups()
     if due["applications"] or due["outreach"]:
         st.subheader("Follow-ups due now")
@@ -1025,7 +1057,7 @@ with tab_tracker:
             cc[2].write(r["applied_at"] or ""); cc[3].write(f"follow-up: {r['follow_up_at'] or '-'}")
 
 # ===================== CV TAB =====================
-with tab_cv:
+if nav == "CV":
     import cv as _cv
 
     # ── Header: completeness score (always visible) ──
@@ -1260,7 +1292,7 @@ with tab_cv:
                         st.dataframe(_pd.DataFrame(changes), width='stretch', hide_index=True)
 
 # ===================== ANALYTICS =====================
-with tab_analytics:
+if nav == "Analytics":
     rows = db.ranked_jobs()
     apps = analytics.applied_only(rows)
     st.caption(f"{len(apps)} applications logged. Metrics are directional — small samples are noisy.")
@@ -1321,7 +1353,7 @@ with tab_analytics:
                 st.success("Saved. Re-run the pipeline to re-score with the new weights.")
 
 # ===================== INTERVIEW COACH =====================
-with tab_interview:
+if nav == "Interview Coach":
     import interview as iv
 
     st.caption("A voice-first mock interviewer for PM rounds — grounded in your real CV and "
@@ -1442,6 +1474,20 @@ with tab_interview:
         r = sess["rounds"][sess["current_round_idx"]]
         rdef = iv.load_rubrics()["rounds"][r["type"]]
 
+        # Prewarm local whisper in the background ONCE per model size, the
+        # moment a voice session is active — otherwise the user's very first
+        # answer pays the 5-15s model-load cost on top of transcription time.
+        # Best-effort and thread-safe (voice_io guards the cache with a lock);
+        # silently a no-op when faster-whisper isn't installed or STT is API.
+        if sess["input_mode"] == "voice" \
+           and cfg.get("interview_coach", {}).get("stt_engine", "local_whisper") == "local_whisper":
+            _wsize = cfg.get("interview_coach", {}).get("whisper_model", "base")
+            if not ss.get(f"ic_prewarm_{_wsize}"):
+                import threading
+                threading.Thread(target=voice_io.prewarm_local_whisper,
+                                 args=(_wsize,), daemon=True).start()
+                ss[f"ic_prewarm_{_wsize}"] = True
+
         st.subheader(f"Round {sess['current_round_idx']+1} of {len(sess['rounds'])}: {rdef['label']}")
         time_left = iv.time_remaining_min(sess)
         tcol1, tcol2, tcol3 = st.columns([2, 1, 1])
@@ -1524,14 +1570,19 @@ with tab_interview:
                                               content_hash=(sess["job"] or {}).get("content_hash"))
 
                     if round_finished:
-                        with st.spinner("Scoring this round…"):
-                            sess, ev, _u = iv.evaluate_round(sess, interview_llm_json(cfg))
+                        # DEFERRED EVALUATION (v1.19.0): don't score here. The old
+                        # flow ran eval + (synthesis or next opening question) as
+                        # 2-3 sequential LLM calls at every round boundary = 10-30s
+                        # of dead air. Now: advance immediately (one opening-
+                        # question call at most); all awaiting_eval rounds are
+                        # batch-scored at the report stage, where a progress bar
+                        # is expected anyway. Total LLM calls are identical —
+                        # they just happen where waiting feels natural.
                         sess, all_done = iv.advance_or_finish(sess)
                         if not all_done:
-                            sess, _q = iv.start_round(sess, llm_fn=interview_llm_text(cfg))
+                            with st.spinner("Next round…"):
+                                sess, _q = iv.start_round(sess, llm_fn=interview_llm_text(cfg))
                         else:
-                            with st.spinner("Preparing your report…"):
-                                sess, _syn, _u2 = iv.synthesize_session(sess, interview_llm_json(cfg))
                             ss["ic_stage"] = "report"
                         ss["ic_session"] = sess
                         db.save_interview_session(ss["ic_session_id"], sess)
@@ -1543,6 +1594,29 @@ with tab_interview:
     # --------------------------------------------------------------- report
     elif ss["ic_stage"] == "report":
         sess = ss["ic_session"]
+
+        # Batch-score any rounds whose evaluation was deferred at wrap-up, then
+        # synthesize — the one place in the flow where a progress bar is
+        # expected, instead of dead air between rounds.
+        pending = [i for i, r in enumerate(sess["rounds"]) if r["status"] == "awaiting_eval"]
+        if pending or (sess["status"] == "completed" and not sess.get("synthesis")):
+            bar = st.progress(0.0, text="Scoring your rounds…")
+            try:
+                for n, idx in enumerate(pending):
+                    rl = iv.load_rubrics()["rounds"][sess["rounds"][idx]["type"]]["label"]
+                    bar.progress(n / max(len(pending) + 1, 1), text=f"Scoring: {rl}")
+                    sess, _ev, _u = iv.evaluate_round(sess, interview_llm_json(cfg), round_idx=idx)
+                if sess["status"] == "completed" and not sess.get("synthesis") \
+                   and any(r.get("eval") for r in sess["rounds"]):
+                    bar.progress(0.9, text="Preparing your overall report…")
+                    sess, _syn, _u2 = iv.synthesize_session(sess, interview_llm_json(cfg))
+                ss["ic_session"] = sess
+                db.save_interview_session(ss["ic_session_id"], sess)
+            except (iv.InterviewError, llm.LLMError) as e:
+                st.error(f"Scoring hit a problem: {e}. Rounds already scored are shown below; "
+                        "reopen this report to retry the rest.")
+            bar.empty()
+
         st.subheader(f"Session report — {sess['loop_key']} · {sess['level']}")
         st.caption(f"Status: {sess['status']}")
 

@@ -2,6 +2,63 @@
 
 All notable changes. Newest first.
 
+## v1.19.0  — Performance release: measured, structural fixes for app + Interview Coach speed
+
+Diagnosed with measurements, not vibes. Raw DB cost of the heavy queries was profiled at ~29ms
+per rerun (270 realistic jobs, 4 full fetches) — so the database was NOT the bottleneck. The
+real costs were structural, and each fix below names its mechanism.
+
+**FIXED — the structural one: st.tabs executed ALL six tabs on every click.** Streamlit reruns
+the entire script on every widget interaction, and `st.tabs` renders every tab's body each time —
+so a single radio click on the Interview Coach setup screen also re-fetched ~270 full jobs FOUR
+times (queue, tracker, analytics, review-distribution ≈ 1.1MB of JD text per fetch), rebuilt the
+270-row data editor, re-ran CV completeness scoring and the analytics aggregations, and
+re-serialized all of it to the browser. Replaced `st.tabs` with `st.segmented_control` navigation
++ `if nav == ...:` guards: only the ACTIVE section's code now runs per interaction. This is the
+fix that makes every click in the Interview tab (and everywhere else) stop paying for five other
+tabs. Section choice persists across reruns via the widget key.
+
+**FIXED — round transitions ran 2-3 sequential LLM calls (10-30s of dead air).** The old flow at
+every round boundary: evaluate the finished round, then synthesize-or-generate the next opening
+question, back to back. New deferred-evaluation flow: at wrap-up the session advances immediately
+(at most ONE opening-question call); all `awaiting_eval` rounds are batch-scored at the report
+stage behind a real progress bar — where waiting is expected. Total LLM calls are IDENTICAL; they
+just moved to where they don't interrupt the conversation. Engine change:
+`evaluate_round(..., round_idx=None)` now accepts an explicit index (tested both paths).
+
+**FIXED — local voice transcription was needlessly slow on CPU.** Three concrete levers in
+`voice_io`: (1) `beam_size=1` greedy decoding — 2-5x faster than faster-whisper's default beam of
+5, a minor accuracy cost that's the right trade here since the transcript is reviewed/edited
+before submitting anyway; (2) `vad_filter=True` skips decoding silence; (3) default model is now
+`base` (~2-3x faster than the previous `small`), selectable in Settings (tiny/base/small).
+Additionally the model is now PREWARMED in a background thread the moment a voice session becomes
+active, so the first answer no longer pays the 5-15s model-load on top of transcription
+(thread-safe per-size cache with a lock; best-effort, silently no-op if the package is missing).
+
+**NEW — optional fast model for interview turns only.** Interview turns are latency-critical in a
+way tailoring isn't. `Settings -> Interview Coach -> "Faster model for interviews"` overrides the
+model for interview LLM calls ONLY (same provider/base_url/key): point it at a Haiku/gpt-4o-mini
+class model for a visibly snappier live loop while tailoring keeps the higher-quality model.
+Empty = unchanged behaviour. Also new: whisper model-size selector. Save now `update()`s the
+interview_coach block instead of replacing it, so future keys survive a settings save.
+
+**Also:** the interview content YAML loaders (rubrics/loops/question-bank) are now `lru_cache`d —
+they were re-read and re-parsed from disk on every rerun; now a dict lookup, with
+`clear_content_cache()` for tests/future editing.
+
+**Honest constraints, unchanged and worth restating:**
+- The per-turn LLM API round-trip (typically 2-8s depending on model/provider) is inherent to a
+  live AI interviewer; the model-override above is the lever, streaming is a possible future.
+- Live interviewing structurally CANNOT run on free Claude Pro manual copy-paste (as stated at
+  v1.18.0). What IS free: local voice (STT/TTS, ₹0 forever) and the whole engine outside LLM
+  calls. The paid part is only the interviewer/evaluator tokens; with a Haiku-class override a
+  full round is roughly a few cents.
+- Streamlit's first-launch import time (torch/sentence-transformers) is a pre-existing cost of
+  the stack, unrelated to and unchanged by this release; embeddings were already lazy-loaded.
+
+Tests: 75/75 passing (+5 new: deferred-eval-by-index path incl. synthesis, eval-by-index status
+guard, loader cache identity + clear, prewarm safe-fail, whisper model-size passthrough).
+
 ## v1.18.1  — Fixes from a real run: Personio double-fetch, Interview Coach slowness, voice UX
 
 Diagnosed directly from a pasted terminal log of a real `python run.py` + `streamlit run app.py`
